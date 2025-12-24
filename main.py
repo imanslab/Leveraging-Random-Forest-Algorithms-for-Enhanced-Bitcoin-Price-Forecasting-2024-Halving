@@ -34,17 +34,17 @@ The author and anyone associated with the code is not responsible for any financ
 """
 
 import os
-import pickle  # For saving and loading models
+import pickle
 import numpy as np
 import pandas as pd
-from datetime import timedelta
+from datetime import timedelta, datetime
 import tensorflow as tf
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split, GridSearchCV, TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
+from scipy.signal import argrelextrema
 import matplotlib
-# matplotlib.use('TkAgg')
 import matplotlib.dates as mdates
 import matplotlib.ticker as ticker
 import matplotlib.pyplot as plt
@@ -66,9 +66,12 @@ btc_data['volatility'] = btc_data['high'] - btc_data['low']
 
 last_date = btc_data['timestamp'].iloc[-1]
 
-# Generate future dates (5 years)
+target_end_date = datetime(2025, 12, 31)
+predict_days = (target_end_date - last_date).days
+if predict_days < 1:
+    predict_days = 365
+
 future_dates = [last_date + timedelta(days=i) for i in range(1, 365 * 7 + 1)]
-predict_days = 30
 recent_avg_volatility = btc_data['volatility'].rolling(window=30).mean().iloc[-1]
 max_historical_price = btc_data['close'].max()
 
@@ -151,40 +154,101 @@ def human_friendly_dollar(x, pos):
         return '${:1.0f}K'.format(x * 1e-3)
     return '${:1.0f}'.format(x)
 
+def find_significant_extrema(dates, prices, order=15, num_points=6):
+    prices_array = np.array(prices)
+    local_max_indices = argrelextrema(prices_array, np.greater, order=order)[0]
+    local_min_indices = argrelextrema(prices_array, np.less, order=order)[0]
+
+    max_prices = [(dates[i], prices_array[i], 'high') for i in local_max_indices]
+    min_prices = [(dates[i], prices_array[i], 'low') for i in local_min_indices]
+
+    all_extrema = max_prices + min_prices
+    all_extrema.sort(key=lambda x: abs(x[1] - np.mean(prices_array)), reverse=True)
+
+    selected = all_extrema[:num_points]
+    selected.sort(key=lambda x: x[0])
+
+    return selected
+
 
 # Plotting and visualization
 plt.style.use('dark_background')
-plt.figure(figsize=(20, 10))
+fig, ax = plt.subplots(figsize=(24, 12))
 
-plt.plot(btc_data['timestamp'], btc_data['close'], label='Actual Prices', color='cyan', linewidth=1)
-plt.plot(future_dates, estimated_future_prices, label='Estimated Future Top Prices', color='orange', linestyle='--', linewidth=2)
+ax.plot(btc_data['timestamp'], btc_data['close'], label='Actual Prices', color='cyan', linewidth=1.5, alpha=0.8)
+
+dec_2024_start = datetime(2024, 12, 1)
+dec_2025_end = datetime(2025, 12, 31)
+future_dates_filtered = [d for d in future_dates if dec_2024_start <= d <= dec_2025_end]
+future_prices_filtered = estimated_future_prices[:len(future_dates_filtered)]
+
+ax.plot(future_dates_filtered, future_prices_filtered, label='Estimated Future Top Prices (Dec 2024 - Dec 2025)', color='orange', linestyle='--', linewidth=2.5, alpha=0.8)
+
+future_extrema = find_significant_extrema(future_dates_filtered, future_prices_filtered, order=8, num_points=10)
+
+for date, price, point_type in future_extrema:
+    if point_type == 'high':
+        ax.plot(date, price, 'r^', markersize=14, markeredgecolor='white', markeredgewidth=2, zorder=5)
+        ax.annotate(f'HIGH\n${price:,.0f}',
+                   xy=(date, price),
+                   xytext=(0, 30),
+                   textcoords='offset points',
+                   ha='center',
+                   fontsize=11,
+                   fontweight='bold',
+                   color='#FF6B6B',
+                   bbox=dict(boxstyle='round,pad=0.6', facecolor='black', edgecolor='#FF6B6B', linewidth=2, alpha=0.9),
+                   arrowprops=dict(arrowstyle='->', color='#FF6B6B', lw=2),
+                   zorder=6)
+    else:
+        ax.plot(date, price, 'gv', markersize=14, markeredgecolor='white', markeredgewidth=2, zorder=5)
+        ax.annotate(f'LOW\n${price:,.0f}',
+                   xy=(date, price),
+                   xytext=(0, -40),
+                   textcoords='offset points',
+                   ha='center',
+                   fontsize=11,
+                   fontweight='bold',
+                   color='#4ECDC4',
+                   bbox=dict(boxstyle='round,pad=0.6', facecolor='black', edgecolor='#4ECDC4', linewidth=2, alpha=0.9),
+                   arrowprops=dict(arrowstyle='->', color='#4ECDC4', lw=2),
+                   zorder=6)
+
 test_dates = btc_data.iloc[test_indices]['timestamp']
 if len(test_dates) > len(predictions):
     test_dates = test_dates[-len(predictions):]
-plt.scatter(test_dates, predictions, label='RandomForest Predicted Prices', color='yellow', marker='.')
+ax.scatter(test_dates, predictions, label='RandomForest Test Predictions', color='yellow', marker='.', s=30, alpha=0.6)
 
 if len(future_dates_for_plotting) == len(future_predictions):
-    plt.plot(future_dates_for_plotting, future_predictions, label=f'{predict_days}-day Future Predictions', color='magenta', linestyle='--', linewidth=2)
+    ax.plot(future_dates_for_plotting, future_predictions, label=f'RF Future Predictions (to Dec 2025)', color='magenta', linestyle='-', linewidth=2, marker='o', markersize=2, alpha=0.7)
 
-# Annotate current price
 current_price = btc_data['close'].iloc[-1]
 current_date = btc_data['timestamp'].iloc[-1]
-plt.annotate(f'Current Price: ${current_price:,.2f}',
-             xy=(current_date, current_price),
-             xytext=(current_date + timedelta(days=150), current_price),
-             arrowprops=dict(facecolor='white', arrowstyle='->'),
-             fontsize=12, color='white')
+ax.annotate(f'Current Price: ${current_price:,.2f}',
+           xy=(current_date, current_price),
+           xytext=(current_date + timedelta(days=100), current_price * 1.05),
+           arrowprops=dict(facecolor='white', arrowstyle='->', lw=2),
+           fontsize=13, fontweight='bold', color='white',
+           bbox=dict(boxstyle='round,pad=0.7', facecolor='darkblue', edgecolor='white', alpha=0.9))
 
-plt.gca().xaxis.set_major_locator(mdates.YearLocator())
-plt.gca().yaxis.set_major_formatter(ticker.FuncFormatter(human_friendly_dollar))
-plt.gcf().autofmt_xdate()
+ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
+ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
+ax.xaxis.set_minor_locator(mdates.WeekdayLocator(byweekday=mdates.MO))
 
-# Final plot settings
-plt.title('Leveraging Random Forest - BTC - (Educational Only)', fontsize=20, color='white')
-plt.xlabel('Date', fontsize=16, color='white')
-plt.ylabel('BTC Price (USD)', fontsize=16, color='white')
-plt.legend(loc='upper left', fontsize=14)
-plt.text(0.5, 0.5, 'Educational Only', fontsize=60, color='gray', alpha=0.2, ha='center', va='center', rotation=45, transform=plt.gca().transAxes)
-plt.grid(True, linestyle='--', alpha=0.5)
+ax.yaxis.set_major_formatter(ticker.FuncFormatter(human_friendly_dollar))
+plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+ax.set_title('BTC Price Prediction - Random Forest Model (Dec 2024 - Dec 2025)',
+            fontsize=22, fontweight='bold', color='white', pad=20)
+ax.set_xlabel('Date', fontsize=16, fontweight='bold', color='white')
+ax.set_ylabel('BTC Price (USD)', fontsize=16, fontweight='bold', color='white')
+
+ax.legend(loc='upper left', fontsize=12, framealpha=0.9, edgecolor='white')
+ax.text(0.5, 0.5, 'Educational Only', fontsize=70, color='gray',
+       alpha=0.15, ha='center', va='center', rotation=30, transform=ax.transAxes)
+
+ax.grid(True, linestyle='--', alpha=0.3, which='major', color='gray')
+ax.grid(True, linestyle=':', alpha=0.15, which='minor', color='gray')
+
 plt.tight_layout()
 plt.show()
