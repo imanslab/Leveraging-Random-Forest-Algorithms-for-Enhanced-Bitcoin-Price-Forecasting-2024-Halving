@@ -1,5 +1,5 @@
 """
-# Leveraging Random Forest Algorithms for Enhanced Bitcoin Price Forecasting Post-2024 Halving.
+# Leveraging Random Forest Algorithms for Enhanced Bitcoin Price Forecasting.
 
 ## Author: Iman Samizadeh
 ## Contact: Iman.samizadeh@gmail.com
@@ -34,6 +34,7 @@ The author and anyone associated with the code is not responsible for any financ
 """
 
 import os
+import pickle  # For saving and loading models
 import numpy as np
 import pandas as pd
 from datetime import timedelta
@@ -42,9 +43,8 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split, GridSearchCV, TimeSeriesSplit
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
-from joblib import dump, load, parallel_backend
 import matplotlib
-matplotlib.use('TkAgg')
+# matplotlib.use('TkAgg')
 import matplotlib.dates as mdates
 import matplotlib.ticker as ticker
 import matplotlib.pyplot as plt
@@ -64,8 +64,6 @@ btc_data['timestamp'] = pd.to_datetime(btc_data['timestamp'], unit='ms')
 # Calculate 'volatility' based on 'high' and 'low' columns
 btc_data['volatility'] = btc_data['high'] - btc_data['low']
 
-halving_dates = data.halving_dates()
-btc_data['days_since_halving'] = btc_data['timestamp'].apply(lambda x: data.days_since_last_halving(x))
 last_date = btc_data['timestamp'].iloc[-1]
 
 # Generate future dates (5 years)
@@ -95,10 +93,9 @@ btc_data = btc_data.dropna().reset_index(drop=True)
 
 # Feature scaling
 scaler = StandardScaler()
-features = ['open_ma_7', 'volatility', 'rsi', 'lagged_close_1', 'rolling_mean_7', 'rolling_std_7', 'days_since_halving', 'volume']
+features = ['open_ma_7', 'volatility', 'rsi', 'lagged_close_1', 'rolling_mean_7', 'rolling_std_7', 'volume']
 X = scaler.fit_transform(btc_data[features])
 y = btc_data['close']
-
 
 # Splitting the dataset
 X_train, X_test, y_train, y_test = train_test_split(btc_data[features], y, test_size=0.2, shuffle=False)
@@ -107,9 +104,10 @@ X_train = scaler.fit_transform(X_train)
 X_test = scaler.transform(X_test)
 
 # Load or train the Random Forest model
-model_path = 'model/random_forest_model.joblib'
+model_path = 'model/random_forest_model.pkl'
 if os.path.exists(model_path):
-    best_model = load(model_path)
+    with open(model_path, 'rb') as f:
+        best_model = pickle.load(f)
 else:
     param_grid = {
         'n_estimators': [100, 200, 300],
@@ -120,11 +118,11 @@ else:
     tscv = TimeSeriesSplit(n_splits=5)
     grid_search = GridSearchCV(RandomForestRegressor(random_state=42), param_grid, cv=tscv, verbose=3)
 
-    with parallel_backend('loky', n_jobs=-1, verbose=10):
-        grid_search.fit(X_train, y_train)
-
+    grid_search.fit(X_train, y_train)
     best_model = grid_search.best_estimator_
-    dump(best_model, model_path)
+
+    with open(model_path, 'wb') as f:
+        pickle.dump(best_model, f)
 
 # Make predictions
 predictions = best_model.predict(X_test)
@@ -135,16 +133,10 @@ future_features_scaled = scaler.transform(future_feature_data)
 future_predictions = best_model.predict(future_features_scaled)
 future_dates_for_plotting = pd.date_range(start=btc_data['timestamp'].iloc[-1] + timedelta(days=1), periods=predict_days)
 
-future_feature_data_to_halving = data.generate_features_to_halving(btc_data, features)
-future_features_scaled_to_halving = scaler.transform(future_feature_data_to_halving)
-future_predictions_to_halving = best_model.predict(future_features_scaled_to_halving)
-future_dates_to_halving = pd.date_range(start=btc_data['timestamp'].iloc[-1] + timedelta(days=1), periods=len(future_predictions_to_halving))
-
 # Evaluate the model
 mse = mean_squared_error(y_test, predictions)
 rmse = np.sqrt(mse)
 r2 = r2_score(y_test, predictions)
-
 
 # Model evaluation results
 print(f"Model Evaluation:")
@@ -166,7 +158,6 @@ plt.figure(figsize=(20, 10))
 
 plt.plot(btc_data['timestamp'], btc_data['close'], label='Actual Prices', color='cyan', linewidth=1)
 plt.plot(future_dates, estimated_future_prices, label='Estimated Future Top Prices', color='orange', linestyle='--', linewidth=2)
-plt.scatter(future_dates_to_halving, future_predictions_to_halving, label='Predictions to Halving', color='green', marker='*', s=100)
 test_dates = btc_data.iloc[test_indices]['timestamp']
 if len(test_dates) > len(predictions):
     test_dates = test_dates[-len(predictions):]
@@ -174,41 +165,6 @@ plt.scatter(test_dates, predictions, label='RandomForest Predicted Prices', colo
 
 if len(future_dates_for_plotting) == len(future_predictions):
     plt.plot(future_dates_for_plotting, future_predictions, label=f'{predict_days}-day Future Predictions', color='magenta', linestyle='--', linewidth=2)
-    future_prediction_x_days = future_predictions[-1]
-    future_date_x_days = future_dates_for_plotting[-1]
-    plt.annotate(f'{predict_days}-Days Future Prediction: ${future_prediction_x_days:,.2f}',
-                 xy=(future_date_x_days, future_prediction_x_days),
-                 xytext=(future_date_x_days - timedelta(days=10), future_prediction_x_days),
-                 arrowprops=dict(facecolor='white', arrowstyle='->'),
-                 fontsize=12, color='magenta')
-
-# More visualizations and annotations
-plt.annotate(f'${last_price:,.2f}',
-             xy=(last_date, last_price),
-             xytext=(last_date + timedelta(days=10), last_price),
-             arrowprops=dict(facecolor='white', arrowstyle='->'),
-             fontsize=12, color='white')
-
-prev_year = future_dates[0].year
-for i in range(len(future_dates)):
-    current_year = future_dates[i].year
-    if current_year != prev_year:
-        plt.annotate(f'{current_year}\n${estimated_future_prices[i]:,.2f}',
-                     xy=(future_dates[i], estimated_future_prices[i]),
-                     xytext=(future_dates[i] + timedelta(days=30), estimated_future_prices[i]),
-                     arrowprops=dict(facecolor='white', arrowstyle='->'),
-                     fontsize=10, color='white',
-                     horizontalalignment='right')
-        prev_year = current_year
-
-# Highlight halving dates
-for halving_date in halving_dates:
-    plt.axvline(x=halving_date, color='red', linestyle='--', linewidth=2)
-    plt.annotate(f'Halving {halving_date.strftime("%Y-%m-%d")}',
-                 xy=(halving_date, plt.ylim()[1]),
-                 xytext=(halving_date, plt.ylim()[1] * 0.6),
-                 arrowprops=dict(facecolor='white', arrowstyle='->', connectionstyle='arc3,rad=-0.2'),
-                 fontsize=12, color='white', horizontalalignment='right')
 
 # Annotate current price
 current_price = btc_data['close'].iloc[-1]
@@ -224,10 +180,11 @@ plt.gca().yaxis.set_major_formatter(ticker.FuncFormatter(human_friendly_dollar))
 plt.gcf().autofmt_xdate()
 
 # Final plot settings
-plt.title('Leveraging Random Forest Algorithms for Enhanced Bitcoin Price Forecasting Post-2024 Halving', fontsize=20, color='white')
+plt.title('Leveraging Random Forest - BTC - (Educational Only)', fontsize=20, color='white')
 plt.xlabel('Date', fontsize=16, color='white')
 plt.ylabel('BTC Price (USD)', fontsize=16, color='white')
 plt.legend(loc='upper left', fontsize=14)
-
+plt.text(0.5, 0.5, 'Educational Only', fontsize=60, color='gray', alpha=0.2, ha='center', va='center', rotation=45, transform=plt.gca().transAxes)
+plt.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
 plt.show()
-
