@@ -32,9 +32,6 @@ The methodology employs Random Forest algorithm to analyse historical Bitcoin da
 4. **Hyperparameter Optimisation**: GridSearchCV explores 81 parameter combinations across 5 time-series folds (405 total model fits)
 5. **Ensemble Prediction**: Random Forest aggregates predictions from multiple decision trees for robust forecasting
 
-### Recent Updates (December 2024)
-
-
 ## ⚠️ DISCLAIMER AND LEGAL NOTICE
 
 **PLEASE READ THIS ENTIRE SECTION CAREFULLY BEFORE USING THIS SOFTWARE**
@@ -235,7 +232,7 @@ chmod +x data-download.sh
 To get started, clone the repository:
 
 ```bash
-git clone git@github.com:SMARTSHEEP-IO/bitcoin-price-prediction-analysis-simulating-growth-near-ath-halving.git
+git clone git@github.com:imanslab/Leveraging-Random-Forest-Algorithms-for-Enhanced-Bitcoin-Price-Forecasting-2024-Halving.git
 ```
 
 ## Usage
